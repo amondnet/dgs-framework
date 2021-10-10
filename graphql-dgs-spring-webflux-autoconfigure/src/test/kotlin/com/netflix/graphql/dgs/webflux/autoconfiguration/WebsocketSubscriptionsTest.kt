@@ -20,6 +20,7 @@ import com.netflix.graphql.dgs.DgsComponent
 import com.netflix.graphql.dgs.DgsSubscription
 import com.netflix.graphql.dgs.DgsTypeDefinitionRegistry
 import com.netflix.graphql.dgs.autoconfig.DgsAutoConfiguration
+import com.netflix.graphql.dgs.webflux.handlers.DgsReactiveSubscriptionEventListener
 import com.netflix.graphql.dgs.webflux.handlers.DgsReactiveWebsocketHandler.Companion.GQL_COMPLETE
 import com.netflix.graphql.dgs.webflux.handlers.DgsReactiveWebsocketHandler.Companion.GQL_CONNECTION_ACK
 import com.netflix.graphql.dgs.webflux.handlers.DgsReactiveWebsocketHandler.Companion.GQL_CONNECTION_INIT
@@ -40,6 +41,7 @@ import org.springframework.core.io.buffer.DataBuffer
 import org.springframework.core.io.buffer.DataBufferUtils
 import org.springframework.http.codec.json.Jackson2JsonDecoder
 import org.springframework.http.codec.json.Jackson2JsonEncoder
+import org.springframework.stereotype.Component
 import org.springframework.util.MimeTypeUtils
 import org.springframework.web.reactive.config.EnableWebFlux
 import org.springframework.web.reactive.socket.WebSocketMessage
@@ -50,6 +52,7 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.publisher.Sinks
 import reactor.test.StepVerifier
+import java.lang.IllegalStateException
 import java.net.URI
 import java.time.Duration
 
@@ -116,18 +119,38 @@ open class WebsocketSubscriptionsTest(@param:LocalServerPort val port: Int) {
             .verifyComplete()
     }
 
+    @Test
+    fun `OnConnect throws error`() {
+        val client: WebSocketClient = ReactorNettyWebSocketClient()
+        val url = URI("ws://localhost:$port/subscriptions")
+        val output: Sinks.Many<OperationMessage> = Sinks.many().replay().all()
+
+        val query = "subscription {ticker}"
+        val execute = clientExecute(client, url, output, query)
+
+        StepVerifier.create(execute).expectComplete().verify()
+
+        StepVerifier.create(output.asFlux().map { it.payload.toString() })
+            .expectNext("{errors=[], data={withError=1}, extensions=null, dataPresent=true}")
+            .expectNext("{errors=[], data={withError=2}, extensions=null, dataPresent=true}")
+            .expectNext("{errors=[], data={withError=3}, extensions=null, dataPresent=true}")
+            .expectNext("{data=null, errors=[Broken producer]}")
+            .verifyError()
+    }
+
     private fun clientExecute(
         client: WebSocketClient,
         url: URI,
         output: Sinks.Many<OperationMessage>,
         query: String,
-        stopAfter: Int? = null
+        stopAfter: Int? = null,
+        connectionParams: Any?
     ) =
         client.execute(url) { session ->
 
             var counter = 0
 
-            return@execute session.send(Mono.just(toWebsocketMessage(OperationMessage(GQL_CONNECTION_INIT), session)))
+            return@execute session.send(Mono.just(toWebsocketMessage(OperationMessage(GQL_CONNECTION_INIT, connectionParams), session)))
                 .thenMany(
                     session.receive().flatMap { message ->
                         val buffer: DataBuffer = DataBufferUtils.retain(message.payload)
@@ -194,6 +217,16 @@ open class WebsocketSubscriptionsTest(@param:LocalServerPort val port: Int) {
                 null
             )
         )
+    }
+
+    @Component
+    class ExampleSubscriptionListener : DgsReactiveSubscriptionEventListener {
+        override fun onConnect(connectionParams: Any?, session: WebSocketSession): Mono<Map<String, Any>> {
+            if (connectionParams != null) {
+                return Mono.error(IllegalStateException("example error"))
+            }
+            return super.onConnect(connectionParams, session)
+        }
     }
 
     @DgsComponent

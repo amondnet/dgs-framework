@@ -26,6 +26,8 @@ import com.netflix.graphql.dgs.reactive.internal.DefaultDgsReactiveGraphQLContex
 import com.netflix.graphql.dgs.reactive.internal.DefaultDgsReactiveQueryExecutor
 import com.netflix.graphql.dgs.reactive.internal.FluxDataFetcherResultProcessor
 import com.netflix.graphql.dgs.reactive.internal.MonoDataFetcherResultProcessor
+import com.netflix.graphql.dgs.webflux.handlers.DefaultReactiveLifecycleEventListener
+import com.netflix.graphql.dgs.webflux.handlers.DgsReactiveSubscriptionEventListener
 import com.netflix.graphql.dgs.webflux.handlers.DgsReactiveWebsocketHandler
 import com.netflix.graphql.dgs.webflux.handlers.DgsWebfluxHttpHandler
 import com.netflix.graphql.dgs.webflux.handlers.WebFluxCookieValueResolver
@@ -129,6 +131,12 @@ open class DgsWebFluxAutoConfiguration(private val configProps: DgsWebfluxConfig
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    open fun dgsSubscriptionEventListener(): DgsReactiveSubscriptionEventListener {
+        return DefaultReactiveLifecycleEventListener()
+    }
+
+    @Bean
     @ConditionalOnProperty(name = ["dgs.graphql.schema-json.enabled"], havingValue = "true", matchIfMissing = true)
     open fun schemaRouter(schemaProvider: DgsSchemaProvider): RouterFunction<ServerResponse> {
         return RouterFunctions.route()
@@ -150,9 +158,19 @@ open class DgsWebFluxAutoConfiguration(private val configProps: DgsWebfluxConfig
     }
 
     @Bean
-    open fun websocketSubscriptionHandler(dgsReactiveQueryExecutor: DgsReactiveQueryExecutor): SimpleUrlHandlerMapping {
+    open fun websocketSubscriptionHandler(
+        dgsReactiveQueryExecutor: DgsReactiveQueryExecutor,
+        dgsSubscriptionEventListener: DgsReactiveSubscriptionEventListener
+    ): SimpleUrlHandlerMapping {
 
-        val simpleUrlHandlerMapping = SimpleUrlHandlerMapping(mapOf("/subscriptions" to DgsReactiveWebsocketHandler(dgsReactiveQueryExecutor)))
+        val simpleUrlHandlerMapping = SimpleUrlHandlerMapping(
+            mapOf(
+                "/subscriptions" to DgsReactiveWebsocketHandler(
+                    dgsReactiveQueryExecutor,
+                    dgsSubscriptionEventListener
+                )
+            )
+        )
         simpleUrlHandlerMapping.order = 1
         return simpleUrlHandlerMapping
     }
